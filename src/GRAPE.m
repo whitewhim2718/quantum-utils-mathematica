@@ -5,7 +5,7 @@
 (*GRAPE Package*)
 
 
-(* ::Subsection::Closed:: *)
+(* ::Subsection:: *)
 (*Copyright and License Information*)
 
 
@@ -22,7 +22,7 @@
 (*THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THEIMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE AREDISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLEFOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIALDAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS ORSERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVERCAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USEOF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.*)
 
 
-(* ::Subsection::Closed:: *)
+(* ::Subsection:: *)
 (*Preamble*)
 
 
@@ -102,7 +102,7 @@ AssignUsage[
 ];
 
 
-(* ::Subsection::Closed:: *)
+(* ::Subsection:: *)
 (*Utility Function and Targets*)
 
 
@@ -163,6 +163,7 @@ AssignUsage[
 Unprotect[
 	IdentityDistribution,
 	ParameterDistributionMean,
+	ProductParameterDistribution,
 	RandomSampleParameterDistribution,RandomMultinormalParameterDistribution,RandomUniformParameterDistribution,
 	UniformParameterDistribution,
 	TargetSelectorDistribution
@@ -173,6 +174,7 @@ AssignUsage[
 	{
 		IdentityDistribution,
 		ParameterDistributionMean,
+		ProductParameterDistribution,
 		RandomSampleParameterDistribution,RandomMultinormalParameterDistribution,RandomUniformParameterDistribution,
 		UniformParameterDistribution,
 		TargetSelectorDistribution
@@ -257,7 +259,7 @@ AssignUsage[
 ];
 
 
-(* ::Subsection::Closed:: *)
+(* ::Subsection:: *)
 (*FindPulse*)
 
 
@@ -285,7 +287,7 @@ FindPulse::baddistlength = "Error: The number of probabilities and replacement r
 FindPulse::badderivmask = "Error: your derivative mask seems to have the wrong dimensions."
 
 
-(* ::Subsection::Closed:: *)
+(* ::Subsection:: *)
 (*Exporters*)
 
 
@@ -317,11 +319,11 @@ JCAMPCalibrationFactor::usage = "JCAMPCalibrationFactor is an ExportJCAMP option
 Begin["`Private`"];
 
 
-(* ::Subsection::Closed:: *)
+(* ::Subsection:: *)
 (*Pulses*)
 
 
-(* ::Subsubsection::Closed:: *)
+(* ::Subsubsection:: *)
 (*Pulse Object*)
 
 
@@ -486,11 +488,16 @@ GaussianTailsPulse[dt_,T_,riseTime_,Max->max_]:=Module[
 (*Legalization and Normalization*)
 
 
-LegalizePulse[pulse_,controlRange_]:=
-	If[ListQ[controlRange],
-		{#1, Sequence@@MapThread[Max[Min[#1,Last@#2],First@#2]&, {{##2},controlRange}]}& @@@ pulse,
-		{#1, Sequence@@( {##2} * Min[1, controlRange/Norm[{##2}]] )}& @@@ pulse
-	]
+LegalizePulse[pulse_,controlRange_]:={#1, Sequence@@MapThread[Clip, {{##2},controlRange}, 1]}& @@@ pulse
+
+
+LegalizePulse[profile_][pulse_,controlRange_]:=Table[
+	{
+		pulse[[n,1]],
+		Sequence@@MapThread[Clip, {pulse[[n,2;;]],profile[[n]]*controlRange}, 1]
+	},
+	{n,Length@pulse}
+]
 
 
 NormalizePulse[pulse_, controlRange_] := 
@@ -499,11 +506,11 @@ With[{tp = Transpose[pulse[[All, -2;;]]]},
 ];
 
 
-(* ::Subsection::Closed:: *)
+(* ::Subsection:: *)
 (*Utility Function and Targets*)
 
 
-(* ::Subsubsection::Closed:: *)
+(* ::Subsubsection:: *)
 (*Unitary Propagators*)
 
 
@@ -535,7 +542,7 @@ PropagatorListFromPulse[pulse_,Hint_,Hcontrol_]:=
 	]
 
 
-(* ::Subsubsection::Closed:: *)
+(* ::Subsubsection:: *)
 (*Target Unitary*)
 
 
@@ -567,7 +574,7 @@ UtilityGradient[pulse_,Hint_,Hcontrol_,Utarget_List]:=
 	];
 
 
-(* ::Subsubsection::Closed:: *)
+(* ::Subsubsection:: *)
 (*Coherent Subspaces*)
 
 
@@ -611,6 +618,45 @@ UtilityGradient[pulse_,Hint_,Hcontrol_,target_CoherentSubspaces]:=
 		]/numSubspaces;
 		performIndex=Utility[Last[Uforw],target];
 		{performIndex,derivs}
+	];
+
+
+(* ::Subsection:: *)
+(*Hamiltonian Discrimination Utility *)
+
+
+Utility[Ucalc_,target_HamiltonianDiscrimination]:=With[
+		{
+		U1 = Take[Ucalc,{1,#/2},{1,#/2}]& [Length[Ucalc]],
+		U2 = Take[Ucalc,{(#/2)+1,#},{(#/2)+1,#}]& [Length[Ucalc]],
+		\[Rho] = target[[1]],
+		sysdims = target[[2]],
+		traceoutsystems = target[[3]],
+		measurement = target[[4]]
+},
+		(Tr[PartialTr[U1.\[Rho].U1\[ConjugateTranspose],sysdims,traceoutsystems].measurement]-Tr[PartialTr[U2.\[Rho].U2\[ConjugateTranspose],sysdims,traceoutsystems].measurement])^2;
+
+]
+
+
+UtilityGradient[pulse_,Hint_,Hcontrol_,target_HamiltonianDiscrimination]:=
+	Module[
+		{
+			dim=Length[Hint],
+			dts,amps,Uforw,Uback,gradient,utility,unitaries
+		},
+		unitaries=PropagatorListFromPulse[pulse,Hint,Hcontrol];
+
+		{dts, amps} = SplitPulse[pulse];
+
+		Uforw=Rest[FoldList[#2.#1&,IdentityMatrix[dim],unitaries]];
+		Uback=Reverse[FoldList[#2\[ConjugateTranspose].#1&,Utarget,Reverse[Rest[unitaries]]]];
+		gradient=Table[
+			-2 Re[Tr[Uback[[i]]\[ConjugateTranspose].(I dts[[i]] Hcontrol[[j]].Uforw[[i]])]*Tr[Uforw[[i]]\[ConjugateTranspose].Uback[[i]]]],
+			{i,Length[unitaries]},{j,Length[Hcontrol]}
+		]/dim^2;
+		utility=Utility[Last[Uforw],Utarget];
+		{utility,gradient}
 	];
 
 
@@ -1105,6 +1151,16 @@ CompositePulseDistortion[divisions_,sequence_]:=Module[{symbols,indeces,seq,dore
 
 
 IdentityDistribution[]:={{1}, {{}}};
+
+
+ProductParameterDistribution[dist1_,dist2_]:=Module[{ps,ps1,ps2,reps,reps1,reps2},
+	{ps1,reps1}=dist1;
+	{ps2,reps2}=dist2;
+	ps=Flatten[Outer[Times,ps1,ps2,1]];
+	reps=Flatten[Outer[Join,reps1,reps2,1],1];
+	{ps,reps}
+]
+ProductParameterDistribution[dist1_,dist2_,moreDists__]:=ProductParameterDistribution[ProductParameterDistribution[dist1,dist2],moreDists]
 
 
 ParameterDistributionMean[gdist_]:=Module[{ps,reps,symbs,mean},
@@ -1821,7 +1877,7 @@ PulsePlotMonitor[opt:OptionsPattern[PulsePlot]]:=Module[{MonitorFn},
 (*Gradient Ascent Tools*)
 
 
-(* ::Subsubsection::Closed:: *)
+(* ::Subsubsection:: *)
 (*Line Search Methods*)
 
 
@@ -2437,7 +2493,7 @@ ExportSHP[filename_, pulse_Pulse, scalePower_:Automatic, digits_:6] := Module[
 End[];
 
 
-(* ::Section::Closed:: *)
+(* ::Section:: *)
 (*End Package*)
 
 
@@ -2485,6 +2541,7 @@ Protect[
 Protect[
 	IdentityDistribution,
 	ParameterDistributionMean,
+	ProductParameterDistribution,
 	RandomSampleParameterDistribution,RandomMultinormalParameterDistribution,RandomUniformParameterDistribution,
 	UniformParameterDistribution,
 	TargetSelectorDistribution
