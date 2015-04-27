@@ -630,11 +630,9 @@ Utility[Ucalc_,target_HamiltonianDiscrimination]:=With[
 		U1 = Take[Ucalc,{1,#/2},{1,#/2}]& [Length[Ucalc]],
 		U2 = Take[Ucalc,{(#/2)+1,#},{(#/2)+1,#}]& [Length[Ucalc]],
 		\[Rho] = target[[1]],
-		sysdims = target[[2]],
-		traceoutsystems = target[[3]],
-		measurement = target[[4]]
+		measurement = target[[2]]
 },
-		(Tr[PartialTr[U1.\[Rho].U1\[ConjugateTranspose],sysdims,traceoutsystems].measurement]-Tr[PartialTr[U2.\[Rho].U2\[ConjugateTranspose],sysdims,traceoutsystems].measurement])^2;
+		(Tr[measurement.U1.\[Rho].ConjugateTranspose[U1]]-Tr[measurement.U2.\[Rho].ConjugateTranspose[U2]])^2;
 
 ]
 
@@ -642,20 +640,36 @@ Utility[Ucalc_,target_HamiltonianDiscrimination]:=With[
 UtilityGradient[pulse_,Hint_,Hcontrol_,target_HamiltonianDiscrimination]:=
 	Module[
 		{
-			dim=Length[Hint],
-			dts,amps,Uforw,Uback,gradient,utility,unitaries
+			dim=Length[Hint]/2,
+			dts,amps,U1s,U2s,H1control,H2control,H1int,H2int,U1forw,,U2forw,U1back,U2back,gradient,utility,gradient1,gradient2,gradientfinal,
+			\[Rho] = target[[1]],
+			measurement = target[[2]]
 		},
-		unitaries=PropagatorListFromPulse[pulse,Hint,Hcontrol];
-
+		
+		H1int= Map[Function[a,Take[a,{1,#/2},{1,#/2}]& [Length[a]]],Hint];
+		H2int = Map[Function[a,Take[a,{(#/2)+1,#},{(#/2)+1,#}]& [Length[a]]],Hint];
+		H1control = Map[Function[a,Take[a,{1,#/2},{1,#/2}]& [Length[a]]],Hcontrol];
+		H2control = Map[Function[a,Take[a,{(#/2)+1,#},{(#/2)+1,#}]& [Length[a]]],Hcontrol];
+		U1s=PropagatorListFromPulse[pulse,H1int,H1control];
+		U2s=PropagatorListFromPulse[pulse,H2int,H2control];		
+		U1forw=Rest[FoldList[#2.#1&,IdentityMatrix[dim],U1s]];
+		U2forw=Rest[FoldList[#2.#1&,IdentityMatrix[dim],U2s]];
+		U1back=Reverse[FoldList[#2\[ConjugateTranspose].#1&,measurement,Reverse[Rest[U1s]]]];
+		U2back=Reverse[FoldList[#2\[ConjugateTranspose].#1&,measurement,Reverse[Rest[U2s]]]];
 		{dts, amps} = SplitPulse[pulse];
 
-		Uforw=Rest[FoldList[#2.#1&,IdentityMatrix[dim],unitaries]];
-		Uback=Reverse[FoldList[#2\[ConjugateTranspose].#1&,Utarget,Reverse[Rest[unitaries]]]];
-		gradient=Table[
-			-2 Re[Tr[Uback[[i]]\[ConjugateTranspose].(I dts[[i]] Hcontrol[[j]].Uforw[[i]])]*Tr[Uforw[[i]]\[ConjugateTranspose].Uback[[i]]]],
-			{i,Length[unitaries]},{j,Length[Hcontrol]}
+		gradient1=Table[
+			-2 Re[Tr[U1back[[i]]\[ConjugateTranspose].(I dts[[i]] H1control[[j]].U1forw[[i]])]*Tr[U1forw[[i]]\[ConjugateTranspose].U1back[[i]]]],
+			{i,Length[U1s]},{j,Length[H1control]}
 		]/dim^2;
-		utility=Utility[Last[Uforw],Utarget];
+		
+		gradient2=Table[
+			-2 Re[Tr[U2back[[i]]\[ConjugateTranspose].(I dts[[i]] H2control[[j]].U2forw[[i]])]*Tr[U2forw[[i]]\[ConjugateTranspose].U2back[[i]]]],
+			{i,Length[U2s]},{j,Length[H2control]}
+		]/dim^2;
+		
+		gradientfinal = (gradient1-gradient2)^2
+		utility=Utility[ArrayFlatten[{{Last[U1forw],0},{0,Last[U2forw]}}],target];
 		{utility,gradient}
 	];
 
